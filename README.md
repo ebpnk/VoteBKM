@@ -24,6 +24,7 @@ The plugin has not been tested in a large environment
   "BanByUserId": true,// true - userid, false- nik
   "MuteByUserId": true,// true - userid, false- nik
   "KickByUserId": true// true - userid, false- nik
+  "MinimumPlayersToStartVote": 4 // The beginning of voting depends on the number of players
 }
 ```
 `Immunity`
