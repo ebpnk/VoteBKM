@@ -15,6 +15,8 @@ public class VoteBanPlugin : BasePlugin
     private Dictionary<string, int> _voteCounts = new Dictionary<string, int>();
     private bool _isVoteActionActive = false;
     private VoteBanConfig? _config;
+    private Dictionary<string, HashSet<int>> _playerVotes = new Dictionary<string, HashSet<int>>(); // Игроки, проголосовавшие за каждого кандидата
+    private Dictionary<int, string> _votedPlayers = new Dictionary<int, string>(); // Игроки, которые уже проголосовали
 
     private const string PluginAuthor = "DoctorishHD";
     public override string ModuleName => "VoteBKM";
@@ -56,11 +58,7 @@ public class VoteBanPlugin : BasePlugin
         player.PrintToChat("[VoteBKM] Процесс голосования был сброшен.");
     }
 
-    private void ResetVotingProcess()
-    {
-        _isVoteActionActive = false;
-        _voteCounts.Clear();
-    }
+    
 
     private bool IsAdminWithFlag(CCSPlayerController? player, string? flag)
     {
@@ -76,12 +74,7 @@ public class VoteBanPlugin : BasePlugin
             return;
         }
 
-        if (_isVoteActionActive)
-        {
-            player.PrintToChat("[VoteBKM] Процесс голосования уже идет полным ходом.");
-            return;
-        }
-
+        // Убираем проверку _isVoteActionActive, чтобы позволить другим игрокам голосовать
         // Проверка на минимальное количество игроков на сервере
         if (Utilities.GetPlayers().Count < _config.MinimumPlayersToStartVote)
         {
@@ -89,7 +82,6 @@ public class VoteBanPlugin : BasePlugin
             return;
         }
 
-        _isVoteActionActive = true;
         ShowVoteMenu(player, executeAction);
     }
 
@@ -109,22 +101,37 @@ public class VoteBanPlugin : BasePlugin
 
     private void HandleVote(CCSPlayerController voter, string targetPlayerName, Action<string> executeAction)
     {
-        if (!_voteCounts.ContainsKey(targetPlayerName))
+        // Проверяем, голосовал ли уже игрок
+        if (_votedPlayers.TryGetValue(voter.UserId.Value, out var votedFor) && votedFor != targetPlayerName)
         {
-            _voteCounts[targetPlayerName] = 1;
-        }
-        else
-        {
-            _voteCounts[targetPlayerName]++;
+            voter.PrintToChat("[VoteBKM] Вы уже проголосовали за другого игрока.");
+            return;
         }
 
+        // Добавляем или обновляем запись о голосе
+        if (!_playerVotes.ContainsKey(targetPlayerName))
+            _playerVotes[targetPlayerName] = new HashSet<int>();
+
+        _playerVotes[targetPlayerName].Add(voter.UserId.Value);
+        _votedPlayers[voter.UserId.Value] = targetPlayerName;
+
         int requiredVotes = (int)(Utilities.GetPlayers().Count * _config.RequiredMajority);
-        if (_voteCounts[targetPlayerName] >= requiredVotes)
+        int currentVotes = _playerVotes[targetPlayerName].Count;
+
+        Server.PrintToChatAll($"[VoteBKM] Текущий счет голосов за {targetPlayerName}: {currentVotes}/{requiredVotes}");
+
+        if (currentVotes >= requiredVotes)
         {
             executeAction(targetPlayerName);
-            _isVoteActionActive = false;
-            _voteCounts.Clear();
+            ResetVotingProcess(); // Сброс после успешного голосования
         }
+    }
+
+
+    private void ResetVotingProcess()
+    {
+        _playerVotes.Clear();
+        _votedPlayers.Clear();
     }
 
     private CCSPlayerController? GetPlayerFromName(string playerName)
@@ -152,7 +159,7 @@ public class VoteBanPlugin : BasePlugin
             }
             else
             {
-                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден.");
+                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или UserId недоступен.");
                 return;
             }
         }
@@ -177,7 +184,7 @@ public class VoteBanPlugin : BasePlugin
             }
             else
             {
-                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден.");
+                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или UserId недоступен.");
                 return;
             }
         }
@@ -202,7 +209,7 @@ public class VoteBanPlugin : BasePlugin
             }
             else
             {
-                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден.");
+                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или UserId недоступен.");
                 return;
             }
         }
