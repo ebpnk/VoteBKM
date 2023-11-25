@@ -32,6 +32,8 @@ The plugin has not been tested in a large environment
 `Admin immunity - @css/votebkm`
 
 
-![image](https://github.com/ebpnk/VoteBKM/assets/49415003/ccfb929c-c22e-422d-b0c8-54dbda3b6c1d)
+![image](https://github.com/ebpnk/VoteBKM/assets/49415003/92a84044-d2d2-4d52-8a25-83563533a189)
+
+
 
 I recommend using this plugin [cs2-bans](https://github.com/Pisex/cs2-bans)
