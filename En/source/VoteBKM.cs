@@ -70,9 +70,22 @@ public class VoteBanPlugin : BasePlugin
 
     private void CommandVote(CCSPlayerController? player, CommandInfo commandInfo, Action<string> executeAction)
     {
-        if (player == null || _isVoteActionActive)
+        if (player == null)
         {
-            player?.PrintToChat("[VoteBKM] The voting process has already started or the player has been declared invalid.");
+            player?.PrintToChat("[VoteBKM] Invalid player.");
+            return;
+        }
+
+        if (_isVoteActionActive)
+        {
+            player.PrintToChat("[VoteBKM] A voting process is already in progress.");
+            return;
+        }
+
+        // Проверка на минимальное количество игроков на сервере
+        if (Utilities.GetPlayers().Count < _config.MinimumPlayersToStartVote)
+        {
+            player.PrintToChat($"[VoteBKM] At least {_config.MinimumPlayersToStartVote} players are required to start voting.");
             return;
         }
 
@@ -215,5 +228,6 @@ public class VoteBanPlugin : BasePlugin
         public bool BanByUserId { get; set; } = true; // Добавляем новую настройку
         public bool MuteByUserId { get; set; } = true;
         public bool KickByUserId { get; set; } = true;
+        public int MinimumPlayersToStartVote { get; set; } = 4;
     }
 }
