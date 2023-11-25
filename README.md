@@ -27,7 +27,8 @@ The plugin has not been tested in a large environment
   "MinimumPlayersToStartVote": 4 // The beginning of voting depends on the number of players
 }
 ```
-`Immunity`
+`Immunity:`
+
 `Admin immunity - @css/votebkm`
 
 
