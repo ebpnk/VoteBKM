@@ -2,11 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Menu;
 using CounterStrikeSharp.API.Modules.Admin;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Core.Attributes;
 
 namespace VoteBanPlugin;
 
@@ -29,6 +32,7 @@ public class VoteBanPlugin : BasePlugin
         AddCommand("votemute", "Initiate votemute process", (player, command) => CommandVote(player, command, ExecuteMute));
         AddCommand("votekick", "Initiate votekick process", (player, command) => CommandVote(player, command, ExecuteKick));
         AddCommand("votereset", "Reset the voting process", CommandVoteReset);
+        
     }
 
     private void LoadConfig()
@@ -44,6 +48,34 @@ public class VoteBanPlugin : BasePlugin
         {
             _config = JsonSerializer.Deserialize<VoteBanConfig>(File.ReadAllText(configFilePath)) ?? new VoteBanConfig();
         }
+    }
+
+    [GameEventHandler]
+    public HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
+    {
+        int userId = (int)@event.Userid.Handle;
+        string disconnectedPlayerName = Utilities.GetPlayerFromUserid(userId)?.PlayerName;
+
+        if (disconnectedPlayerName != null && _playerVotes.ContainsKey(disconnectedPlayerName))
+        {
+            _playerVotes.Remove(disconnectedPlayerName);
+
+            foreach (var voteEntry in _votedPlayers.ToList().Where(entry => entry.Value == disconnectedPlayerName))
+            {
+                _votedPlayers.Remove(voteEntry.Key);
+            }
+
+            Server.PrintToChatAll($"[VoteBKM] Голосование за {disconnectedPlayerName} отменено, так как он покинул сервер.");
+        }
+        return HookResult.Continue;
+    }
+
+    private void ResetVotingProcess()
+    {
+        _isVoteActionActive = false;
+        _voteCounts.Clear();
+        _playerVotes.Clear();
+        _votedPlayers.Clear();
     }
 
     private void CommandVoteReset(CCSPlayerController? player, CommandInfo commandInfo)
@@ -101,25 +133,33 @@ public class VoteBanPlugin : BasePlugin
 
     private void HandleVote(CCSPlayerController voter, string targetPlayerName, Action<string> executeAction)
     {
+        int voterUserId = voter.UserId.Value;
+
         // Проверяем, голосовал ли уже игрок
-        if (_votedPlayers.TryGetValue(voter.UserId.Value, out var votedFor) && votedFor != targetPlayerName)
+        if (_votedPlayers.TryGetValue(voterUserId, out var previousVote))
         {
-            voter.PrintToChat("[VoteBKM] Вы уже проголосовали за другого игрока.");
-            return;
+            // Если игрок ранее голосовал за другого кандидата, убираем его голос
+            if (previousVote != targetPlayerName)
+            {
+                _playerVotes[previousVote].Remove(voterUserId);
+            }
         }
 
         // Добавляем или обновляем запись о голосе
         if (!_playerVotes.ContainsKey(targetPlayerName))
+        {
             _playerVotes[targetPlayerName] = new HashSet<int>();
+        }
 
-        _playerVotes[targetPlayerName].Add(voter.UserId.Value);
-        _votedPlayers[voter.UserId.Value] = targetPlayerName;
+        _playerVotes[targetPlayerName].Add(voterUserId);
+        _votedPlayers[voterUserId] = targetPlayerName;
 
         int requiredVotes = (int)(Utilities.GetPlayers().Count * _config.RequiredMajority);
         int currentVotes = _playerVotes[targetPlayerName].Count;
 
-        Server.PrintToChatAll($"[VoteBKM] Текущий счет голосов за {targetPlayerName}: {currentVotes}/{requiredVotes}");
+        Server.PrintToChatAll($"[VoteBKM] Текущий подсчет голосов за {targetPlayerName}: {currentVotes}/{requiredVotes}");
 
+        // Проверяем, достигнуто ли необходимое количество голосов
         if (currentVotes >= requiredVotes)
         {
             executeAction(targetPlayerName);
@@ -128,11 +168,6 @@ public class VoteBanPlugin : BasePlugin
     }
 
 
-    private void ResetVotingProcess()
-    {
-        _playerVotes.Clear();
-        _votedPlayers.Clear();
-    }
 
     private CCSPlayerController? GetPlayerFromName(string playerName)
     {
@@ -159,7 +194,7 @@ public class VoteBanPlugin : BasePlugin
             }
             else
             {
-                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или UserId недоступен.");
+                Console.WriteLine($"Игрок с именем  {identifier} не найден или идентификатор пользователя недоступен.");
                 return;
             }
         }
@@ -184,7 +219,7 @@ public class VoteBanPlugin : BasePlugin
             }
             else
             {
-                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или UserId недоступен.");
+                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или идентификатор пользователя недоступен.");
                 return;
             }
         }
@@ -194,7 +229,7 @@ public class VoteBanPlugin : BasePlugin
         }
 
         Server.ExecuteCommand(command);
-        Server.PrintToChatAll($"[VoteMute] Игрок {identifier} был заглушен.");
+        Server.PrintToChatAll($"[VoteMute] Игрок {identifier} был отключен.");
     }
 
     private void ExecuteKick(string identifier)
@@ -209,7 +244,7 @@ public class VoteBanPlugin : BasePlugin
             }
             else
             {
-                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или UserId недоступен.");
+                Console.WriteLine($"[Ошибка] Игрок с именем {identifier} не найден или идентификатор пользователя недоступен.");
                 return;
             }
         }
@@ -219,7 +254,7 @@ public class VoteBanPlugin : BasePlugin
         }
 
         Server.ExecuteCommand(command);
-        Server.PrintToChatAll($"[VoteKick] Игрок {identifier} был кикнут с сервера.");
+        Server.PrintToChatAll($"[VoteKick] Игрок  {identifier} был удален с сервера.");
     }
 
 
