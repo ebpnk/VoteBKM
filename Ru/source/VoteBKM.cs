@@ -53,22 +53,33 @@ public class VoteBanPlugin : BasePlugin
     [GameEventHandler]
     public HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {
-        int userId = (int)@event.Userid.Handle;
-        string disconnectedPlayerName = Utilities.GetPlayerFromUserid(userId)?.PlayerName;
-
-        if (disconnectedPlayerName != null && _playerVotes.ContainsKey(disconnectedPlayerName))
+        try
         {
-            _playerVotes.Remove(disconnectedPlayerName);
-
-            foreach (var voteEntry in _votedPlayers.ToList().Where(entry => entry.Value == disconnectedPlayerName))
+            int userId = (int)@event.Userid.Handle;
+            var player = Utilities.GetPlayerFromUserid(userId);
+            if (player != null)
             {
-                _votedPlayers.Remove(voteEntry.Key);
-            }
+                string disconnectedPlayerName = player.PlayerName;
+                if (disconnectedPlayerName != null && _playerVotes.ContainsKey(disconnectedPlayerName))
+                {
+                    _playerVotes.Remove(disconnectedPlayerName);
 
-            Server.PrintToChatAll($"[VoteBKM] Голосование за {disconnectedPlayerName} отменено, так как он покинул сервер.");
+                    foreach (var voteEntry in _votedPlayers.ToList().Where(entry => entry.Value == disconnectedPlayerName))
+                    {
+                        _votedPlayers.Remove(voteEntry.Key);
+                    }
+
+                    Server.PrintToChatAll($"[VoteBKM] Голосование за {disconnectedPlayerName} отменено, так как игрок покинул сервер.");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при обработке отключения игрока: {ex.Message}");
         }
         return HookResult.Continue;
     }
+
 
     private void ResetVotingProcess()
     {
