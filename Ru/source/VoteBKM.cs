@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Linq;
+using System.Timers;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
@@ -20,6 +21,10 @@ public class VoteBanPlugin : BasePlugin
     private VoteBanConfig? _config;
     private Dictionary<string, HashSet<int>> _playerVotes = new Dictionary<string, HashSet<int>>(); // Игроки, проголосовавшие за каждого кандидата
     private Dictionary<int, string> _votedPlayers = new Dictionary<int, string>(); // Игроки, которые уже проголосовали
+    private BannedPlayersConfig _bannedPlayersConfig;
+    private string _bannedPlayersConfigFilePath;
+    private Timer _banCheckTimer;
+    
 
     private const string PluginAuthor = "DoctorishHD";
     public override string ModuleName => "VoteBKM";
@@ -27,13 +32,20 @@ public class VoteBanPlugin : BasePlugin
 
     public override void Load(bool hotReload)
     {
+        _bannedPlayersConfigFilePath = Path.Combine(ModuleDirectory, "BannedPlayersConfig.json");
+        _banCheckTimer = new Timer(10000); // Период в миллисекундах (10 секунд)
+        _banCheckTimer.Elapsed += OnBanCheck; // Обработчик события
+        _banCheckTimer.AutoReset = true;
+        _banCheckTimer.Enabled = true;
         LoadConfig();
+        LoadBannedPlayersConfig();
         AddCommand("voteban", "Initiate voteban process", (player, command) => CommandVote(player, command, ExecuteBan));
         AddCommand("votemute", "Initiate votemute process", (player, command) => CommandVote(player, command, ExecuteMute));
         AddCommand("votekick", "Initiate votekick process", (player, command) => CommandVote(player, command, ExecuteKick));
         AddCommand("votereset", "Reset the voting process", CommandVoteReset);
         
     }
+
 
     private void LoadConfig()
     {
@@ -50,11 +62,26 @@ public class VoteBanPlugin : BasePlugin
         }
     }
 
+    private void OnBanCheck(Object source, ElapsedEventArgs e)
+    {
+        UnbanExpiredPlayers(); // Вызов функции для удаления истекших банов
+
+        foreach (var player in Utilities.GetPlayers())
+        {
+            string steamId = player.SteamID.ToString();
+            if (IsPlayerBanned(steamId))
+            {
+                Server.ExecuteCommand($"kickid {player.UserId}");
+            }
+        }
+    }
+
     [GameEventHandler]
     public HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {
         try
         {
+            // Используйте приведение типа для конвертации nint в int
             int userId = (int)@event.Userid.Handle;
             var player = Utilities.GetPlayerFromUserid(userId);
             if (player != null)
@@ -69,16 +96,17 @@ public class VoteBanPlugin : BasePlugin
                         _votedPlayers.Remove(voteEntry.Key);
                     }
 
-                    Server.PrintToChatAll($"[VoteBKM] Голосование за {disconnectedPlayerName} отменено, так как игрок покинул сервер.");
+                    Server.PrintToChatAll($"[VoteBKM] Голосование за {disconnectedPlayerName} было отменено, так как они покинули сервер.");
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при обработке отключения игрока: {ex.Message}");
+            Console.WriteLine($"Error handling player disconnect: {ex.Message}");
         }
         return HookResult.Continue;
     }
+
 
 
     private void ResetVotingProcess()
@@ -121,7 +149,7 @@ public class VoteBanPlugin : BasePlugin
         // Проверка на минимальное количество игроков на сервере
         if (Utilities.GetPlayers().Count < _config.MinimumPlayersToStartVote)
         {
-            player.PrintToChat($"[VoteBKM] Для начала голосования требуется как минимум {_config.MinimumPlayersToStartVote} игрока.");
+            player.PrintToChat($"[VoteBKM] Для начала голосования требуется как минимум {_config.MinimumPlayersToStartVote} игрок(а)");
             return;
         }
 
@@ -178,7 +206,44 @@ public class VoteBanPlugin : BasePlugin
         }
     }
 
+    [GameEventHandler]
+    public HookResult OnPlayerConnect(EventPlayerConnect eventArgs, GameEventInfo info)
+    {
+        try
+        {
+            int userId = eventArgs.Userid.Handle.ToInt32();
+            var player = Utilities.GetPlayerFromUserid(userId);
+            if (player != null)
+            {
+                string steamId = player.SteamID.ToString();
+                Console.WriteLine($"Player connecting with SteamID: {steamId}"); // Логирование для отладки
 
+                if (IsPlayerBanned(steamId))
+                {
+                    Console.WriteLine($"Player {steamId} is banned. Kicking from server."); // Логирование для отладки
+                    Server.ExecuteCommand($"kickid {player.UserId}");
+                    return HookResult.Handled;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error handling player connect: {ex.Message}");
+        }
+        return HookResult.Continue;
+    }
+
+
+    private CCSPlayerController? GetPlayerFromSteamID(string steamId)
+    {
+        return Utilities.GetPlayers().FirstOrDefault(p => p.SteamID.ToString() == steamId);
+    }
+
+    private string? GetSteamIDFromPlayerName(string playerName)
+    {
+        var player = Utilities.GetPlayers().FirstOrDefault(p => p.PlayerName.Equals(playerName, StringComparison.OrdinalIgnoreCase));
+        return player?.SteamID.ToString();
+    }
 
     private CCSPlayerController? GetPlayerFromName(string playerName)
     {
@@ -195,28 +260,17 @@ public class VoteBanPlugin : BasePlugin
 
     private void ExecuteBan(string identifier)
     {
-        string command;
-        if (_config.BanByUserId)
+        var player = GetPlayerFromName(identifier) ?? GetPlayerFromSteamID(identifier);
+        if (player != null && player.UserId.HasValue)
         {
-            var player = GetPlayerFromName(identifier);
-            if (player != null && player.UserId.HasValue)
-            {
-                command = string.Format(_config.BanCommand, player.UserId.Value, _config.BanDuration);
-            }
-            else
-            {
-                Console.WriteLine($"Игрок с именем  {identifier} не найден или идентификатор пользователя недоступен.");
-                return;
-            }
+            BanPlayer(player.SteamID.ToString(), _config?.BanDuration ?? 0);
         }
         else
         {
-            command = string.Format(_config.BanCommand, identifier, _config.BanDuration);
+            Console.WriteLine($"Игрок с идентификатором {identifier} не найден.");
         }
-
-        Server.ExecuteCommand(command);
-        Server.PrintToChatAll($"[VoteBan] Игрок {identifier} был забанен на {_config.BanDuration} секунд.");
     }
+
 
     private void ExecuteMute(string identifier)
     {
@@ -240,7 +294,7 @@ public class VoteBanPlugin : BasePlugin
         }
 
         Server.ExecuteCommand(command);
-        Server.PrintToChatAll($"[VoteMute] Игрок {identifier} был отключен.");
+        Server.PrintToChatAll($"[VoteMute] Игроку {identifier} был отключен(Микро).");
     }
 
     private void ExecuteKick(string identifier)
@@ -265,23 +319,104 @@ public class VoteBanPlugin : BasePlugin
         }
 
         Server.ExecuteCommand(command);
-        Server.PrintToChatAll($"[VoteKick] Игрок  {identifier} был удален с сервера.");
+        Server.PrintToChatAll($"[VoteKick] Игрок {identifier} был удален с сервера.");
+    }
+
+    private void LoadBannedPlayersConfig()
+    {
+        if (File.Exists(_bannedPlayersConfigFilePath))
+        {
+            string json = File.ReadAllText(_bannedPlayersConfigFilePath);
+            _bannedPlayersConfig = JsonSerializer.Deserialize<BannedPlayersConfig>(json);
+        }
+        else
+        {
+            _bannedPlayersConfig = new BannedPlayersConfig();
+        }
+    }
+
+    private void SaveBannedPlayersConfig()
+    {
+        string json = JsonSerializer.Serialize(_bannedPlayersConfig, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(_bannedPlayersConfigFilePath, json);
+    }
+
+    private void BanPlayer(string steamId, int durationInSeconds)
+    {
+        var banEndTime = DateTimeOffset.UtcNow.AddSeconds(durationInSeconds).ToUnixTimeSeconds();
+        string? nickname = GetPlayerFromSteamID(steamId)?.PlayerName;
+
+        var bannedPlayerInfo = new BannedPlayerInfo
+        {
+            BanEndTime = banEndTime,
+            Nickname = nickname
+        };
+
+        _bannedPlayersConfig.BannedPlayers[steamId] = bannedPlayerInfo;
+        SaveBannedPlayersConfig();
+
+        var player = GetPlayerFromSteamID(steamId);
+        if(player != null) {
+            Server.ExecuteCommand($"kickid {player.UserId}");
+        }
+    }
+
+    private bool IsPlayerBanned(string steamId)
+    {
+        if (_bannedPlayersConfig.BannedPlayers.TryGetValue(steamId, out var bannedPlayerInfo))
+        {
+            bool isBanned = DateTimeOffset.UtcNow.ToUnixTimeSeconds() < bannedPlayerInfo.BanEndTime;
+            //Console.WriteLine($"IsPlayerBanned check for {steamId}: {isBanned}"); // Логирование для отладки
+            return isBanned;
+        }
+        return false;
+    }
+
+    private void UnbanExpiredPlayers()
+    {
+        var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var expiredBans = _bannedPlayersConfig.BannedPlayers
+            .Where(kvp => kvp.Value.BanEndTime < currentTime)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var steamId in expiredBans)
+        {
+            _bannedPlayersConfig.BannedPlayers.Remove(steamId);
+        }
+
+        if (expiredBans.Any())
+        {
+            SaveBannedPlayersConfig(); // Сохранение обновлённого конфига
+        }
     }
 
 
 
 
+    public class BannedPlayersConfig
+    {
+        public Dictionary<string, BannedPlayerInfo> BannedPlayers { get; set; } = new Dictionary<string, BannedPlayerInfo>();
+    }
+
+    public class BannedPlayerInfo
+    {
+        public long BanEndTime { get; set; }
+        public string Nickname { get; set; }
+    }
+
     public class VoteBanConfig
     {
-        public string BanCommand { get; set; } = "mm_ban #{0} {1} VoteBan";
+        //public string BanCommand { get; set; } = "mm_ban #{0} {1} VoteBan";
         public string MuteCommand { get; set; } = "mm_mute #{0} {1} Votemute";
         public string KickCommand { get; set; } = "mm_kick #{0}";
-        public int BanDuration { get; set; } = 10;
+        public int BanDuration { get; set; } = 120;
         public double RequiredMajority { get; set; } = 0.5;
         public bool BanByUserId { get; set; } = true; // Добавляем новую настройку
         public bool MuteByUserId { get; set; } = true;
         public bool KickByUserId { get; set; } = true;
         public int MinimumPlayersToStartVote { get; set; } = 4;
     }
+
 }
  
