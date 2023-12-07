@@ -37,4 +37,3 @@ BannedPlayersConfig.json // Bans are stored here // Automatically deleted ban
 
 
 
-I recommend using this plugin [cs2-bans](https://github.com/Pisex/cs2-bans)
