@@ -256,36 +256,44 @@ public class VoteBanPlugin : BasePlugin
         return AdminManager.PlayerHasPermissions(player, flag);
     }
 
-    private void CommandVote(CCSPlayerController? player, CommandInfo commandInfo, Action<string> executeAction)
+   private void CommandVote(CCSPlayerController? player, CommandInfo commandInfo, Action<string> executeAction)
     {
         if (player == null)
         {
-            Console.WriteLine("[VoteBanPlugin] Error: Player is null.");
+            Console.WriteLine("[VoteBanPlugin] Ошибка: Значение игрока равно нулю.");
             return;
         }
 
         if (Config == null)
         {
-            Console.WriteLine("[VoteBanPlugin] Error: Config is null.");
+            Console.WriteLine("[VoteBanPlugin] Ошибка: значение Config равно null.");
             return;
         }
 
-        var players = Utilities.GetPlayers();
-        if (players == null || !players.Any())
+        // Получаем список активных игроков, исключая тех, кто вышел (UserId 65535)
+        var activePlayers = Utilities.GetPlayers().Where(p => p.UserId.Value != 65535).ToList();
+        if (activePlayers.Count < Config.MinimumPlayersToStartVote)
         {
-            player.PrintToChat("[VoteBKM] На сервере нет игроков.");
+            player.PrintToChat($"[VoteBKM] На сервере недостаточно активных игроков для начала голосования.");
             return;
         }
 
-        // Убираем проверку _isVoteActionActive, чтобы позволить другим игрокам голосовать
-        if (players.Count < Config.MinimumPlayersToStartVote)
+        // Подсчёт необходимого количества голосов на основе количества активных игроков
+        int requiredVotes = (int)Math.Ceiling(activePlayers.Count * Config.RequiredMajority);
+
+        // Проверка, достаточно ли активных игроков для начала голосования
+        if (activePlayers.Count >= requiredVotes)
         {
-            player.PrintToChat($"[VoteBKM] Для начала голосования требуется как минимум {Config.MinimumPlayersToStartVote} игрок(а)");
-            return;
+            ShowVoteMenu(player, executeAction);
         }
-
-        ShowVoteMenu(player, executeAction);
+        else
+        {
+            player.PrintToChat($"[VoteBKM] Для выполнения действия требуется как минимум {requiredVotes} голосов.");
+        }
     }
+
+
+
 
 
     private void ShowVoteMenu(CCSPlayerController player, Action<string> executeAction)
@@ -293,7 +301,7 @@ public class VoteBanPlugin : BasePlugin
         var voteMenu = new ChatMenu("Голосуйте за игрока");
         foreach (var p in Utilities.GetPlayers())
         {
-            if (IsAdminWithFlag(p, "@css/votebkm"))
+            if (IsAdminWithFlag(p, "@css/votebkm") || p.UserId.Value == 65535)
                 continue;
 
             string playerName = p.PlayerName;
@@ -306,13 +314,20 @@ public class VoteBanPlugin : BasePlugin
     {
         if (voter == null || string.IsNullOrEmpty(targetPlayerName) || executeAction == null)
         {
-            Console.WriteLine("[VoteBanPlugin] Error: voter, targetPlayerName, or executeAction is null.");
+            Console.WriteLine("[VoteBanPlugin] Ошибка: значение voter, targetPlayerName или ExecuteAction равно null.");
+            return;
+        }
+
+        // Игнорирование голосов от игроков с UserId 65535
+        if (voter.UserId.Value == 65535)
+        {
+            Console.WriteLine("[VoteBanPlugin] Игнорирование голосования игрока с идентификатором пользователя 65535.");
             return;
         }
 
         int voterUserId = voter.UserId.Value;
 
-        // Проверяем, голосовал ли уже игрок
+        // Проверка, голосовал ли уже игрок
         if (_votedPlayers.TryGetValue(voterUserId, out var previousVote))
         {
             if (previousVote != targetPlayerName && _playerVotes.ContainsKey(previousVote))
@@ -321,7 +336,7 @@ public class VoteBanPlugin : BasePlugin
             }
         }
 
-        // Добавляем или обновляем запись о голосе
+        // Добавление или обновление записи о голосе
         if (!_playerVotes.ContainsKey(targetPlayerName))
         {
             _playerVotes[targetPlayerName] = new HashSet<int>();
@@ -330,12 +345,17 @@ public class VoteBanPlugin : BasePlugin
         _playerVotes[targetPlayerName].Add(voterUserId);
         _votedPlayers[voterUserId] = targetPlayerName;
 
-        int requiredVotes = (int)(Utilities.GetPlayers().Count * Config.RequiredMajority);
-        int currentVotes = _playerVotes[targetPlayerName].Count;
+        // Подсчет активных голосов без учета UserId 65535
+        var activeVotes = _playerVotes.Where(vote => vote.Value.All(id => Utilities.GetPlayerFromUserid(id)?.UserId.Value != 65535)).ToDictionary(entry => entry.Key, entry => entry.Value);
 
+        int currentVotes = activeVotes.ContainsKey(targetPlayerName) ? activeVotes[targetPlayerName].Count : 0;
+        int activePlayersCount = Utilities.GetPlayers().Count(p => p.UserId.Value != 65535);
+        int requiredVotes = (int)Math.Ceiling(activePlayersCount * Config.RequiredMajority);
+
+        // Вывод текущего подсчета голосов в чат
         Server.PrintToChatAll($"[VoteBKM] Текущий подсчет голосов за {targetPlayerName}: {currentVotes}/{requiredVotes}");
 
-        // Проверяем, достигнуто ли необходимое количество голосов
+        // Проверка, достигнуто ли необходимое количество голосов
         if (currentVotes >= requiredVotes)
         {
             executeAction(targetPlayerName);
@@ -359,7 +379,7 @@ public class VoteBanPlugin : BasePlugin
         string steamId = player.SteamID.ToString();
         if (IsPlayerBanned(steamId))
         {
-            Console.WriteLine($"[VoteBanPlugin] Banned player {player.PlayerName} (SteamID: {steamId}) is being kicked.");
+            Console.WriteLine($"[VoteBanPlugin] Забаненный игрок {player.PlayerName} (SteamID: {steamId}) кикнут");
             Server.ExecuteCommand($"kickid {player.UserId}");
         }
     }
@@ -463,27 +483,40 @@ public class VoteBanPlugin : BasePlugin
 
     private void ExecuteMute(string identifier)
     {
-        var player = GetPlayerFromName(identifier);
-        if (player != null && player.UserId.HasValue)
+        var playerToMute = GetPlayerFromName(identifier) ?? GetPlayerFromSteamID(identifier);
+        
+        if (playerToMute == null)
         {
-            string steamId = player.SteamID.ToString();
-            if (!IsPlayerBanned(steamId))
-            {
-                string command = _config.MuteByUserId ? 
-                                string.Format(_config.MuteCommand, player.UserId.Value) :
-                                string.Format(_config.MuteCommand, identifier);
-                Server.ExecuteCommand(command);
-                Server.PrintToChatAll($"[VoteMute] Игроку {identifier} был отключен микрофон.");
-            }
-            else
-            {
-                Console.WriteLine($"[VoteBanPlugin] Игрок {player.PlayerName} (SteamID: {steamId}) забанен.");
-            }
+            Console.WriteLine($"[VoteBanPlugin] Error: Player with identifier '{identifier}' not found.");
+            return;
         }
-        else
+
+        if (!playerToMute.UserId.HasValue || string.IsNullOrEmpty(playerToMute.SteamID.ToString()))
         {
-            Console.WriteLine($"[VoteBanPlugin] Игрок с именем {identifier} не найден.");
+            Console.WriteLine($"[VoteBanPlugin] Error: Player '{playerToMute.PlayerName}' has invalid UserId or SteamID.");
+            return;
         }
+
+        if (IsPlayerMuted(playerToMute))
+        {
+            Console.WriteLine($"[VoteBanPlugin] Player {playerToMute.PlayerName} (SteamID: {playerToMute.SteamID}) is already muted.");
+            return;
+        }
+
+        MutePlayer(playerToMute);
+
+        Console.WriteLine($"[VoteBanPlugin] Player {playerToMute.PlayerName} (SteamID: {playerToMute.SteamID}) has been muted.");
+    }
+
+    private void MutePlayer(CCSPlayerController player)
+    {
+        player.VoiceFlags = VoiceFlags.Muted;
+        // Здесь может быть дополнительная логика, если нужно сохранить информацию о муте
+    }
+
+    private bool IsPlayerMuted(CCSPlayerController player)
+    {
+        return player.VoiceFlags.HasFlag(VoiceFlags.Muted);
     }
 
     private void ExecuteKick(string identifier)
@@ -621,26 +654,14 @@ public class VoteBanPlugin : BasePlugin
 
     public class VoteBanConfig : BasePluginConfig
     {
-        [JsonPropertyName("MuteCommand")]
-        public string MuteCommand { get; set; } = "ERROR";
-
         [JsonPropertyName("BanDuration")]
-        public int BanDuration { get; set; } = 120;
+        public int BanDuration { get; set; } = 3600;
 
         [JsonPropertyName("RequiredMajority")]
         public double RequiredMajority { get; set; } = 0.5;
 
-        [JsonPropertyName("BanByUserId")]
-        public bool BanByUserId { get; set; } = true;
-
-        [JsonPropertyName("MuteByUserId")]
-        public bool MuteByUserId { get; set; } = true;
-
-        [JsonPropertyName("KickByUserId")]
-        public bool KickByUserId { get; set; } = true;
-
         [JsonPropertyName("MinimumPlayersToStartVote")]
-        public int MinimumPlayersToStartVote { get; set; } = 2;
+        public int MinimumPlayersToStartVote { get; set; } = 4;
     }
 
 }
